@@ -3,13 +3,17 @@ const uniqueValidator = require('mongoose-unique-validator')
 
 const suppCalendar = new mongoose.Schema({
     week:{
-        type: String,
+        type: Number,
         required: true
     },
     minutes:{
         type: Number,
         required: true,
         default: 0
+    },
+    majDate:{
+        type: String,
+        required: true
     }
 })
 
