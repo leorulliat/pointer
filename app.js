@@ -1,8 +1,10 @@
 require("dotenv").config();
+const { render } = require("ejs");
 const express = require("express");
 const mongoose = require('mongoose')
 const moment = require("moment")
 const auth = require('./auth')
+const path = require("path")
 require('moment-timezone');
 const app = express();
 
@@ -15,6 +17,8 @@ const minutesDay8 = 480;		//minutes dans un jour de 8h
 
 const PORT = process.env.PORT;
 
+app.set('view engine', 'ejs');
+app.set('views', path.resolve( __dirname, 'views') );
 app.use(express.json())
 moment.tz.setDefault('Europe/Paris');
 
@@ -36,7 +40,12 @@ db.once('open', () => console.log("Connected to Database"))
 
 const durationDay8 = moment.duration("08:00:00")
 const durationDayStd = moment.duration("07:48:00")
+const fakeLunch = moment.duration("1:20:00");
 
+app.get('/', (req,res) => {
+	
+	res.render("index");
+})
 
 app.get('/today', auth, async (req,res) => {
 	var date = getCurrentDate();
@@ -52,13 +61,16 @@ app.get('/today', auth, async (req,res) => {
 		points.forEach(item => {
 			tabPoints.push(item.time)
 		})
+		var bfakeLunch = false;
 		switch(points.length){
 			case 0:
 				sMsg = "Pointer le début de journée"
+				bfakeLunch = true
 				break;
 			case 1:
 				sMsg = "Pointer la pause de midi"
 				durationMorning = moment.duration(currentTime.diff(toMomentTime(tabPoints[0])))
+				bfakeLunch = true
 				break;
 			case 2:
 				sMsg = "Pointer le retour de pause"
@@ -79,11 +91,15 @@ app.get('/today', auth, async (req,res) => {
 				endOfDay = true;
 				break;
 		}
+		if(bfakeLunch){
+			var info = "prévois "+moment.utc(fakeLunch.as('milliseconds')).format("HH:mm")+" h pour la pause de midi";
+		}
 		res.json({
 			success : true,
-			workTime : getFormatTimes(durationMorning, durationLunch, durationAfternoon, endOfDay),
+			workTime : getFormatTimes(durationMorning, durationLunch, durationAfternoon, endOfDay, bfakeLunch),
 			msg : sMsg,
-			points : tabPoints
+			points : tabPoints,
+			info
 		})
 	}catch(err){
 		res.status(500).json({
@@ -234,12 +250,13 @@ function toMomentTime(item){
 	return moment(item,"HH:mm:ss")
 }
 
-function getFormatTimes(durationMorning,durationLunch,durationAfternoon, endOfDay){
+function getFormatTimes(durationMorning,durationLunch,durationAfternoon, endOfDay, bfakeLunch){
 	var day8 = {}
 	var dayStd = {};
 	if(!endOfDay){
-		day8.consigne = moment(moment.duration(moment())+(durationDay8-(durationMorning+durationAfternoon))).format("HH:mm:ss")
-		dayStd.consigne = moment(moment.duration(moment())+(durationDayStd-(durationMorning+durationAfternoon))).format("HH:mm:ss")
+		var dLunch = bfakeLunch ? fakeLunch : moment.duration("00:00:00")
+		day8.consigne = moment(moment.duration(moment())+(durationDay8-(durationMorning+durationAfternoon-dLunch))).format("HH:mm:ss")
+		dayStd.consigne = moment(moment.duration(moment())+(durationDayStd-(durationMorning+durationAfternoon-dLunch))).format("HH:mm:ss")
 	}else{
 		const oDuration8 = _getDurations(durationMorning,durationAfternoon,durationDay8)
 		const oDurationStd = _getDurations(durationMorning,durationAfternoon,durationDayStd)
