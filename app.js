@@ -8,7 +8,10 @@ const app = express();
 
 
 const Point = require('./models/pointSchema')
-const Supp = require('./models/suppSchema')
+const Week = require('./models/weekSchema')
+const minutesWeek = 2340;		//minutes dans une semaine
+const minutesDayStandard = 468; //minutes dans un jour
+const minutesDay8 = 480;		//minutes dans un jour de 8h
 
 const PORT = process.env.PORT;
 
@@ -31,7 +34,8 @@ db.on('error', (error) => console.error(error))
 db.once('open', () => console.log("Connected to Database"))
 
 
-const durationDay = moment.duration("08:00:00")
+const durationDay8 = moment.duration("08:00:00")
+const durationDayStd = moment.duration("07:48:00")
 
 
 app.get('/today', auth, async (req,res) => {
@@ -77,8 +81,7 @@ app.get('/today', auth, async (req,res) => {
 		}
 		res.json({
 			success : true,
-			nb : points.length,
-			workTime : getFormatTimes(durationMorning, durationLunch, durationAfternoon, durationDay, endOfDay),
+			workTime : getFormatTimes(durationMorning, durationLunch, durationAfternoon, endOfDay),
 			msg : sMsg,
 			points : tabPoints
 		})
@@ -91,8 +94,14 @@ app.get('/today', auth, async (req,res) => {
 })
 
 app.post("/pointer", auth, async (req,res) => {
+	const pointTime = req.body.time
 	var sDate = getCurrentDate()
-	var sTime = moment().format("HH:mm:ss")
+	var sTime;
+	if(pointTime != undefined){
+		sTime = moment(pointTime,"HH:mm").format("HH:mm:ss")
+	}else{
+		sTime = moment().format("HH:mm:ss")
+	}
 	var point = new Point({
 		date: sDate,
 		time: sTime
@@ -119,11 +128,42 @@ app.get('/week', auth, async (req,res) => {
 	const date = getCurrentDate()
 	const week = getCurrentWeek()
     try {
-		var oSupp = await Supp.findOne({week})
+		var oWeek = await Week.findOne({week})
+		if(!oWeek){
+			var oWeek = {
+				week,
+				minutesWork: 0,
+				nbDaysClosed: 0,
+				majDate: date
+			}
+		}
+		var conisgne8 = ((minutesDay8)*oWeek.nbDaysClosed);
+		if(oWeek.nbDaysClosed > 4){
+			conisgne8 -+ 60;	// on enleve une heure pour arriver a 39H
+		}
+		var conisgneStd = ((minutesDayStandard)*oWeek.nbDaysClosed);
+		
+		var dayStd = {
+			consigne : conisgneStd,
+			delta : Math.abs(oWeek.minutesWork-conisgneStd).toFixed(2),
+			heureSup : (oWeek.minutesWork >= conisgneStd)
+		}
+		var day8 = {
+			consigne : conisgne8,
+			delta : Math.abs(oWeek.minutesWork-conisgne8).toFixed(2),
+			heureSup : (oWeek.minutesWork >= conisgne8)
+		}
+		if(oWeek.nbDaysClosed > 4){
+			dayStd = day8 = undefined
+		}
 		res.json({success: true, res:{
-			week: oSupp.week,
-			time: oSupp.minutes,	// changer en temps
-			dayClosed : (oSupp.majDate == date)
+			week: oWeek.week,
+			timeWorked: oWeek.minutesWork,	// changer en temps
+			timeLeft: minutesWeek - oWeek.minutesWork,
+			nbDaysClosed: oWeek.nbDaysClosed,
+			dayStd,
+			day8,
+			currentDayClosed : (oWeek.majDate == date)
 		}})
     } catch (err) {
         res.status(500).json({success : false, msg: err.message})
@@ -140,43 +180,33 @@ app.post("/close", auth, async (req,res) => {
 		points.forEach(item => {
 			tabPoints.push(item.time)
 		})
+		if(tabPoints.length < 4){
+			throw new Error("Journée non terminée")
+		}
 		var durationMorning = moment.duration(toMomentTime(tabPoints[1]).diff(toMomentTime(tabPoints[0])))
 		var durationAfternoon = moment.duration(toMomentTime(tabPoints[3]).diff(toMomentTime(tabPoints[2])))
-		var duration1, duration2, isHSupp;
-		if(durationDay > (durationMorning+durationAfternoon)){
-			duration1 = durationDay;
-			duration2 = (durationMorning+durationAfternoon);
-			isHSupp = false;
-		}else{
-			duration1 = (durationMorning+durationAfternoon);
-			duration2 = durationDay;
-			isHSupp = true;
-		}
-		var delta = moment.duration(duration1-duration2).asMinutes()
-		var nbHSupp = isHSupp ? delta.toFixed(2) : -delta.toFixed(2);
-		if(points.length >= 4){
-			var oSupp = await Supp.findOne({week})
-			if(oSupp){
-				if(!forceUpdate && oSupp.majDate == date){
-					throw new Error("Journée déjà cloturée");
-				}
-				nbHSupp = (oSupp.minutes + nbHSupp).toFixed(2)
-				await Supp.findOneAndUpdate({week}, {minutes: nbHSupp, majDate: date});
-			}else{
-				const defaultHSupp = 60;
-				nbHSupp = nbHSupp+defaultHSupp;
-				var oHSupp = new Supp({
-					week,
-					minutes: nbHSupp,
-					majDate: date
-				})
-				await oHSupp.save()
+
+		var timeWorkedToday = moment.duration(durationMorning+durationAfternoon).asMinutes().toFixed(2)
+		var oWeek = await Week.findOne({week})
+		var timeWorkedWeek;
+		if(oWeek){
+			if(!forceUpdate && oWeek.majDate == date){
+				throw new Error("Journée déjà cloturée");
 			}
-			res.json({success : true, value: nbHSupp})
+			timeWorkedWeek = (oWeek.minutesWork + parseFloat(timeWorkedToday)).toFixed(2)
+			await Week.findOneAndUpdate({week}, {minutesWork: timeWorkedWeek, nbDaysClosed: (oWeek.nbDaysClosed + 1), majDate: date});
 		}else{
-			res.json({success : false, msg: "Journée non terminée"})
-			return
+			var oWeek = new Week({
+				week,
+				minutesWork: timeWorkedToday,
+				nbDaysClosed: 1,
+				majDate: date
+			})
+			await oWeek.save()
+			timeWorkedWeek = timeWorkedToday;
 		}
+		// nbHSupp A CALCULER
+		res.json({success : true, timeWorkedToday, timeWorkedWeek})
     } catch (err) {
         res.status(500).json({message: err.message})
     }
@@ -186,12 +216,6 @@ app.listen(PORT, () => console.log(`Server started on port : ${PORT}`));
 
 
 /******  FUNCTION ******/
-
-function checkAuth(){
-	if(req.headers.token != TOKEN){
-		res.status(401).send("Unauthorized")
-	}
-}
 
 function getCurrentDate(){
 	return moment().format("YYYY-MM-DD");
@@ -206,38 +230,50 @@ function getCurrentWeek(){
     return Math.ceil(days / 7);
 }
 
-function getTimeDiff(time1, time2){
-	var mins = moment.utc(moment(time2, "HH:mm:ss").diff(moment(time1, "HH:mm:ss")))
-	return mins.format("HH:mm:ss")
-}
-
 function toMomentTime(item){
 	return moment(item,"HH:mm:ss")
 }
 
-function getFormatTimes(durationMorning,durationLunch,durationAfternoon, durationDay, endOfDay){
+function getFormatTimes(durationMorning,durationLunch,durationAfternoon, endOfDay){
+	var day8 = {}
+	var dayStd = {};
 	if(!endOfDay){
-		var consigne = moment(moment.duration(moment())+(durationDay-(durationMorning+durationAfternoon))).format("HH:mm:ss")
+		day8.consigne = moment(moment.duration(moment())+(durationDay8-(durationMorning+durationAfternoon))).format("HH:mm:ss")
+		dayStd.consigne = moment(moment.duration(moment())+(durationDayStd-(durationMorning+durationAfternoon))).format("HH:mm:ss")
 	}else{
-		var duration1, duration2, heureSup;
-		if(durationDay > (durationMorning+durationAfternoon)){
-			duration1 = durationDay;
-			duration2 = (durationMorning+durationAfternoon);
-			heureSup = false;
-		}else{
-			duration1 = (durationMorning+durationAfternoon);
-			duration2 = durationDay;
-			heureSup = true;
-		}
-		var delta = moment.utc(duration1-duration2).format("HH:mm:ss")
+		const oDuration8 = _getDurations(durationMorning,durationAfternoon,durationDay8)
+		const oDurationStd = _getDurations(durationMorning,durationAfternoon,durationDayStd)
+		day8.delta = moment.utc(oDuration8.duration1-oDuration8.duration2).format("HH:mm:ss")
+		day8.heureSup = oDuration8.heureSup;
+		dayStd.delta = moment.utc(oDurationStd.duration1-oDurationStd.duration2).format("HH:mm:ss")
+		dayStd.heureSup = oDurationStd.heureSup;
 	}
 	return {
 		morning : moment.utc(durationMorning.as('milliseconds')).format("HH:mm:ss"),
 		lunch : moment.utc(durationLunch.as('milliseconds')).format("HH:mm:ss"),
 		afternoon : moment.utc(durationAfternoon.as('milliseconds')).format("HH:mm:ss"),
 		totalWork : moment.utc(durationMorning+durationAfternoon).format("HH:mm:ss"),
-		consigne,
-		delta,
-		heureSup
+		day8,
+		dayStd
 	}
+}
+
+function _getDurations(durationMorning,durationAfternoon,durationDay){
+	if(durationDay > (durationMorning+durationAfternoon)){
+		return {
+			duration1 : durationDay,
+			duration2 : moment.duration(durationMorning+durationAfternoon),
+			heureSup : false
+		}
+	}else{
+		return {
+			duration1 : moment.duration(durationMorning+durationAfternoon),
+			duration2 : durationDay,
+			heureSup : true
+		}
+	}
+}
+
+function showDuration(d){
+	console.log(moment.utc(d.as('milliseconds')).format("HH:mm:ss"))
 }

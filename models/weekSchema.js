@@ -1,12 +1,17 @@
 const mongoose = require('mongoose')
 const uniqueValidator = require('mongoose-unique-validator')
 
-const suppCalendar = new mongoose.Schema({
+const weekCalendar = new mongoose.Schema({
     week:{
         type: Number,
         required: true
     },
-    minutes:{
+    minutesWork:{
+        type: Number,
+        required: true,
+        default: 0
+    },
+    nbDaysClosed:{
         type: Number,
         required: true,
         default: 0
@@ -17,6 +22,6 @@ const suppCalendar = new mongoose.Schema({
     }
 })
 
-suppCalendar.plugin(uniqueValidator);
+weekCalendar.plugin(uniqueValidator);
 
-module.exports = mongoose.model('Supp', suppCalendar)
+module.exports = mongoose.model('Week', weekCalendar)
